@@ -1,0 +1,18 @@
+# Base and output ISOs (large binaries — never commit)
+iso/base/*
+iso/output/*
+
+# Update packages dropped per version
+updates/**/*.msu
+updates/**/*.cab
+updates/**/*.wim
+updates/**/*.esd
+
+# Scratch working area (ISO extracts, WIM mount points)
+work/
+
+# Run transcripts
+logs/
+
+# Keep the tracked placeholders so the folder layout survives a clone
+!**/.gitkeep
