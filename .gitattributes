@@ -1,1 +1,23 @@
+# Windows / PowerShell project — keep CRLF line endings in the working tree.
+# Default: let Git detect text, and always check text out with CRLF regardless of
+# the developer's core.autocrlf setting.
 * text=auto eol=crlf
+
+# Be explicit for the source/text types so they are always treated as text and
+# checked out with CRLF (not left to auto-detection).
+*.ps1        text eol=crlf
+*.psm1       text eol=crlf
+*.psd1       text eol=crlf
+*.md         text eol=crlf
+*.txt        text eol=crlf
+*.json       text eol=crlf
+*.xml        text eol=crlf
+*.cmd        text eol=crlf
+*.bat        text eol=crlf
+
+# Binary artifacts — never apply line-ending conversion.
+*.iso        binary
+*.msu        binary
+*.cab        binary
+*.wim        binary
+*.esd        binary
