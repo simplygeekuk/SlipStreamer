@@ -1,0 +1,25 @@
+@{
+    # File NAME of the clean base ISO. Always read from iso/base/ (no path needed).
+    # May be a wildcard, as long as it matches exactly one ISO in iso/base/.
+    BaseIso     = 'Win_Server_STD_and_datacenter_2019_64Bit_English_MSDN.ISO'
+
+    # File NAME for the slipstreamed ISO. Always written to iso/output/.
+    OutputIso   = 'Server2019_patched.iso'
+
+    # Folder holding the update packages (.msu / .cab) for this version:
+    # LCU and, optionally, SSU and/or .NET. Applied in order SSU -> LCU -> .NET.
+    UpdatesPath = 'updates/2019'
+
+    # Which install.wim indexes (editions) to patch. Empty (@()) or omitted = patch ALL.
+    # Use the 1-based index numbers logged during a run (or: dism /Get-WimInfo /WimFile:...).
+    # Unselected editions remain in the ISO, just unpatched. Example: @(1, 3)
+    Indexes     = @(2)
+
+    # Volume label stamped onto the rebuilt ISO (max 32 chars).
+    VolumeLabel = 'SERVER2019'
+
+    # $true  -> run /StartComponentCleanup /ResetBase after patching each index
+    #           (smaller WIM, updates become permanent / non-removable).
+    # $false -> keep updates removable and skip the (slow) cleanup pass.
+    ResetBase   = $true
+}
