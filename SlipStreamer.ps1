@@ -16,8 +16,9 @@
     Drop the base ISO in iso/base/ and the matching update packages (LCU, optional SSU/.NET) in updates/<version>/
     before running. Must be run elevated.
 
-.PARAMETER Version
-    One or more of 2019, 2022, 2025.
+.PARAMETER ArgumentList
+    One or more versions to slipstream: 2019, 2022, 2025. Values may be given positionally
+    or after -Version (e.g. -Version 2019,2025).
 
 .PARAMETER All
     Process every version that has both a base ISO and update packages present.
@@ -34,20 +35,88 @@
 .EXAMPLE
     .\SlipStreamer.ps1 -Version 2019,2025 -KeepWork
 #>
-[CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Version')]
+[CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(ParameterSetName = 'Version', Mandatory, Position = 0)]
-    [ValidateSet('2019', '2022', '2025')]
-    [string[]]$Version,
-
-    [Parameter(ParameterSetName = 'All', Mandatory)]
     [switch]$All,
 
-    [switch]$KeepWork
+    [switch]$KeepWork,
+
+    # Versions arrive as loose arguments and are parsed by hand below. A declared -Version
+    # parameter can't behave gracefully here: the binder throws "Missing an argument" on a
+    # bare "-Version" before the script body runs. The catch-all lets us show usage instead.
+    # (Cost: no tab completion for the version values.)
+    # object[] (not string[]): a comma list like "-Version 2019,2025" arrives as one nested
+    # array element, which a string[] cast would mangle into the single string "2019 2025".
+    [Parameter(ValueFromRemainingArguments)]
+    [object[]]$ArgumentList = @()
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$validVersions = @('2019', '2022', '2025')
+
+$usage = @'
+
+SlipStreamer - slipstream SSU / LCU / .NET updates into Windows Server ISOs.
+
+USAGE:
+    .\SlipStreamer.ps1 -Version <2019|2022|2025>[,...] [-KeepWork] [-WhatIf]
+    .\SlipStreamer.ps1 -All [-KeepWork] [-WhatIf]
+
+OPTIONS:
+    -Version    One or more of 2019, 2022, 2025.
+    -All        Process every version that has a base ISO and updates present.
+    -KeepWork   Keep the work/<version>/ scratch tree after a successful build.
+    -WhatIf     Dry run: show what would happen without changing anything.
+
+EXAMPLES:
+    .\SlipStreamer.ps1 -Version 2022
+    .\SlipStreamer.ps1 -Version 2019,2025 -KeepWork
+    .\SlipStreamer.ps1 -All -WhatIf
+
+Before running, drop the base ISO in iso\base\ and the update packages in
+updates\<version>\. Must be run from an elevated PowerShell session.
+
+For full help: Get-Help .\SlipStreamer.ps1 -Detailed
+'@
+
+$Version        = @()
+$sawVersionFlag = $false
+$usageError     = $null
+
+# The inner loop unwraps the nested array a comma list produces; "-Version:2022" reaches us
+# as the two tokens "-Version:" and "2022".
+$tokens = @(foreach ($item in $ArgumentList) { foreach ($value in @($item)) { [string]$value } })
+foreach ($token in $tokens) {
+    if ($token -match '^-Version:?$') { $sawVersionFlag = $true }
+    elseif ($token -match '^-')       { $usageError = "Unknown argument: $token" }
+    else                              { $Version += ($token -split ',' | Where-Object { $_ }) }
+}
+
+if (-not $usageError) {
+    $invalid = @($Version | Where-Object { $_ -notin $validVersions })
+    if ($invalid.Count) {
+        $usageError = "Invalid version(s): $($invalid -join ', '). Valid values: $($validVersions -join ', ')."
+    }
+    elseif ($All -and $Version.Count) {
+        $usageError = 'Specify either -Version or -All, not both.'
+    }
+}
+
+if ($usageError) {
+    Write-Host "ERROR: $usageError" -ForegroundColor Red
+    Write-Host $usage
+    exit 1
+}
+
+if (-not $All -and -not $Version.Count) {
+    if ($sawVersionFlag) {
+        Write-Host 'No value supplied for -Version; expected one or more of: 2019, 2022, 2025.' -ForegroundColor Yellow
+    }
+    Write-Host $usage
+    exit 0
+}
 
 Import-Module (Join-Path $PSScriptRoot 'src\SlipStreamer.psm1') -Force
 
@@ -58,7 +127,7 @@ $repoRoot = $PSScriptRoot
 $logDir   = Join-Path $repoRoot 'logs'
 if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
-if ($All) { $Version = @('2019', '2022', '2025') }
+if ($All) { $Version = $validVersions }
 
 $overallFailures = @()
 
