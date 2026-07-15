@@ -88,18 +88,28 @@ Each `config/<version>.psd1`:
 | `OutputIso`   | File name for the slipstreamed ISO. Always written to `iso/output/` — no path. |
 | `UpdatesPath` | Folder of `.msu`/`.cab` packages for this version.                      |
 | `Indexes`     | 1-based `install.wim` index numbers to patch. Empty/omitted = all. Unselected editions stay in the ISO, just unpatched. e.g. `@(1, 3)`. |
-| `VolumeLabel` | ISO volume label (≤ 32 chars).                                          |
+| `VolumeLabel` | ISO volume label (≤ 32 chars — enforced up front).                      |
 | `ResetBase`   | `$true` runs `/StartComponentCleanup /ResetBase` — smaller WIM, updates become permanent. `$false` (default) keeps them removable. |
+| `TrimToSelected` | `$true` exports only the patched `Indexes` into a fresh, smaller `install.wim` (drops unpatched editions). Requires a non-empty `Indexes`; ignored (with a warning) when all editions are patched. Surviving editions are renumbered `1..N`. `$false` (default) keeps every edition. |
+| `ScratchDir`  | Optional. Directory DISM uses for temporary scratch while servicing. Omitted/empty = `work/<version>/scratch`. Relative = repo-relative; absolute used as-is. Needs several GB free. |
+
+The config is schema-checked on load: unknown/typo'd keys, missing required keys, a non-boolean
+`ResetBase`/`TrimToSelected`, or an over-length `VolumeLabel` all fail immediately with a clear
+message before any work starts.
 
 ## What it does per version
 
-1. Validate config, base ISO, and update packages.
+1. Validate config (schema + `VolumeLabel` length), base ISO, and update packages, then
+   **precheck free disk space** — the work extract, DISM scratch, and output ISO are estimated and
+   summed per volume; a shortfall fails the run up front with a per-drive breakdown.
 2. Mount the base ISO, copy its full contents to `work/<version>/iso`, dismount, clear the
    read-only flag on `install.wim`.
 3. For **every selected index** in `install.wim` (all by default, or just those in `Indexes`):
    mount → apply updates in order (SSU → LCU → .NET) → optional `/ResetBase` → commit.
-4. Rebuild `iso/output/<name>.iso` with oscdimg (dual BIOS + UEFI boot).
-5. Discard any stale WIM mount and clean `work/` (unless `-KeepWork`).
+4. If `TrimToSelected` is set (and `Indexes` selects a subset), export just those editions into a
+   smaller `install.wim`, dropping the unpatched ones.
+5. Rebuild `iso/output/<name>.iso` with oscdimg (dual BIOS + UEFI boot).
+6. Discard any stale WIM mount and clean `work/` (unless `-KeepWork`).
 
 Failures are caught per version; a crashed run is cleaned up so it won't leave a locked
 WIM mount blocking the next attempt.
@@ -190,9 +200,5 @@ self-contained addition when needed:
 - **Patch `boot.wim` / WinRE** — apply Setup Dynamic + Safe OS updates to `boot.wim` and
   `winre.wim` so Windows Setup and the recovery environment are serviced too. Would add a
   `PatchBoot` switch to the config and a step alongside `Update-InstallWim`.
-- **Edition trim** — index **selection** is implemented (see `Indexes` above: patch only chosen
-  editions). Still deferred is *trimming* — `Export-WindowsImage` just the patched editions into a
-  smaller `install.wim` for faster Packer builds. Would add a `TrimToSelected` key to
-  `config/<version>.psd1`.
 - **`install.esd` support** — auto-convert `install.esd` → `install.wim` before patching,
   instead of rejecting it.

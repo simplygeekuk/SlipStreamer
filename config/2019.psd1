@@ -23,9 +23,14 @@
     # $false -> keep updates removable and skip the (slow) cleanup pass.
     ResetBase   = $true
 
+    # Optional: after patching, export ONLY the selected Indexes into a fresh install.wim so the
+    # output ISO drops the unpatched editions (smaller media for Packer). Needs a non-empty
+    # Indexes; ignored with a warning when Indexes is empty/all. Surviving editions are renumbered
+    # 1..N (Setup selects by edition name, not index). Omitted / $false -> keep every edition.
+    TrimToSelected = $true
+
     # Optional: directory DISM uses for temporary scratch space while servicing the image.
     # Omitted/empty -> defaults to work\<version>\scratch (on the same drive as the work tree).
     # Relative paths are repo-relative; absolute paths are used as-is. Needs several GB free.
     # ScratchDir = 'D:\dism-scratch'
 }
-

@@ -165,12 +165,17 @@ foreach ($ver in $Version) {
         Write-Log "Indexes    : $idxLabel"
         Write-Log "ResetBase  : $($config.ResetBase)"
         Write-Log "ScratchDir : $($config.ScratchDir)"
+        Write-Log "Trim       : $($config.TrimToSelected)"
+
+        # Fail fast if any target volume is short on space before the long extract/patch begins.
+        Assert-FreeSpace -Config $config
 
         # Forward -WhatIf explicitly: preference variables (incl. $WhatIfPreference) do NOT
         # cross the Import-Module boundary, so without this the module functions would run
         # for real even under -WhatIf.
         $isoWork = Expand-BaseIso -Config $config -WhatIf:$WhatIfPreference
         Update-InstallWim -Config $config -IsoWork $isoWork -WhatIf:$WhatIfPreference
+        Optimize-InstallWim -Config $config -IsoWork $isoWork -WhatIf:$WhatIfPreference
         New-BootableIso -Config $config -IsoWork $isoWork -OscdimgPath $oscdimg -WhatIf:$WhatIfPreference
 
         Write-Log "Windows Server $ver complete." -Level STEP

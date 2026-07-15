@@ -34,8 +34,7 @@ function Write-Log {
 
 function Disable-ConsoleQuickEdit {
     <#  Clear the console's QuickEdit mode so an accidental click can't pause a long-running step
-        (robocopy copy, DISM). Best-effort: silently no-ops where it doesn't apply (redirected /
-        non-interactive input, Windows Terminal). Session-scoped; not restored on exit. #>
+        Session-scoped; not restored on exit. #>
     [CmdletBinding()]
     param()
     if (-not [Environment]::UserInteractive) { return }
@@ -121,6 +120,49 @@ Expected under: %ProgramFiles(x86)%\Windows Kits\10\Assessment and Deployment Ki
 '@
 }
 
+function Assert-ValidConfig {
+    <#  Validate the raw config hashtable from config\<Version>.psd1 before any path resolution:
+        catch typo'd/unknown keys, missing required keys, wrong boolean types, and an over-length
+        VolumeLabel, with actionable messages, instead of failing silently or late. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Config,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    # Single source of truth for the config schema.
+    $required = @('BaseIso', 'OutputIso', 'UpdatesPath', 'VolumeLabel')
+    $optional = @('Indexes', 'ResetBase', 'ScratchDir', 'TrimToSelected')
+    $allowed  = $required + $optional
+
+    # Unknown keys are almost always typos (e.g. 'VolumeLable') that would otherwise be read as
+    # $null and silently ignored. Reject them, naming the offenders and the allowed set.
+    $unknown = @($Config.Keys | Where-Object { $_ -notin $allowed })
+    if ($unknown.Count) {
+        throw "config\$Version.psd1 has unknown key(s): $($unknown -join ', '). Allowed keys: $($allowed -join ', ')."
+    }
+
+    # Required keys must be present and non-empty.
+    foreach ($key in $required) {
+        if (-not $Config.ContainsKey($key) -or [string]::IsNullOrWhiteSpace([string]$Config[$key])) {
+            throw "config\$Version.psd1 is missing required key '$key' (or it is empty)."
+        }
+    }
+
+    # VolumeLabel must fit the UDF/oscdimg -l limit (32 chars) or the ISO build fails late.
+    $label = [string]$Config['VolumeLabel']
+    if ($label.Length -gt 32) {
+        throw "config\$Version.psd1 'VolumeLabel' is $($label.Length) chars; the maximum is 32. Shorten '$label'."
+    }
+
+    # Boolean toggles, if present, must be real booleans (a stray string would coerce misleadingly).
+    foreach ($key in @('ResetBase', 'TrimToSelected')) {
+        if ($Config.ContainsKey($key) -and $Config[$key] -isnot [bool]) {
+            throw "config\$Version.psd1 '$key' must be `$true or `$false. Got: '$($Config[$key])'."
+        }
+    }
+}
+
 function Get-VersionConfig {
     <#  Load config/<Version>.psd1, resolve paths, and validate inputs exist. #>
     [CmdletBinding()]
@@ -132,6 +174,7 @@ function Get-VersionConfig {
     }
 
     $cfg = Import-PowerShellDataFile -LiteralPath $configFile
+    Assert-ValidConfig -Config $cfg -Version $Version
 
     # BaseIso / OutputIso are FILE NAMES only. They are always resolved inside the
     # deterministic repo folders iso\base and iso\output — any directory part in the config
@@ -185,6 +228,11 @@ function Get-VersionConfig {
         $scratchDir = Resolve-RepoPath ([string]$cfg.ScratchDir)
     }
 
+    # Optional boolean toggles default to $false when omitted. Guard with ContainsKey: under
+    # Set-StrictMode -Latest a bare $cfg.<missing-key> access throws rather than returning $null.
+    $resetBase      = if ($cfg.ContainsKey('ResetBase'))      { [bool]$cfg.ResetBase }      else { $false }
+    $trimToSelected = if ($cfg.ContainsKey('TrimToSelected')) { [bool]$cfg.TrimToSelected } else { $false }
+
     [pscustomobject]@{
         Version     = $Version
         BaseIso     = $baseIso
@@ -193,9 +241,10 @@ function Get-VersionConfig {
         Packages    = $packages
         Indexes     = $indexes
         VolumeLabel = [string]$cfg.VolumeLabel
-        ResetBase   = [bool]$cfg.ResetBase
+        ResetBase   = $resetBase
         WorkRoot    = $workRoot
         ScratchDir  = $scratchDir
+        TrimToSelected = $trimToSelected   # keep every edition unless set; see Optimize-InstallWim
     }
 }
 
@@ -206,13 +255,13 @@ function Get-OrderedPackage {
 
         Catalog .msu filenames are named by KB number, not type (e.g.
         windows10.0-kb5094123-x64_<hash>.msu), so type detection is best-effort.
-        For full control — or a stand-alone SSU whose name isn't self-describing —
-        prefix every file with a number (01_, 02_, ...) and that order is used verbatim.
+        For full control or a stand-alone SSU whose name isn't self-describing,
+        prefix every file with a number (01_, 02_, ...) and that order is used.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][System.IO.FileInfo[]]$Packages)
 
-    # Explicit override: if EVERY file carries a numeric prefix, honour it verbatim.
+    # Explicit override: if EVERY file carries a numeric prefix, honour it.
     $numbered = @($Packages | Where-Object { $_.Name -match '^\d{1,3}[-_ .]' })
     if ($numbered.Count -eq $Packages.Count) {
         return $Packages | Sort-Object @{ Expression = { [int]($_.Name -replace '^(\d{1,3}).*', '$1') } }, Name
@@ -220,11 +269,72 @@ function Get-OrderedPackage {
 
     # Otherwise bucket by best-effort filename heuristics.
     $rank = {
-        if ($_.Name -match 'ssu|servicing[-_ ]?stack')                 { 0 }  # SSU first
+        if ($_.Name -match 'ssu|servicing[-_ ]?stack')                 { 0 }   # SSU first
         elseif ($_.Name -match 'ndp\d|netfx|dotnet|net[-_ ]?framework') { 2 }  # .NET last
-        else                                                           { 1 }  # LCU / other
+        else                                                           { 1 }   # LCU / other
     }
     $Packages | Sort-Object @{ Expression = $rank }, Name
+}
+
+function Assert-FreeSpace {
+    <#  Estimate the disk each stage needs and fail fast if any target volume is short, before the
+        long extract/patch begins. Read-only, so safe under -WhatIf. Work extract + WIM growth,
+        DISM scratch, and the output ISO are summed per unique drive root (they often share one
+        volume), then compared with actual free space. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][pscustomobject]$Config)
+
+    # Heuristic sizing (tune here). All in bytes.
+    $workFactor    = 2      # extracted ISO copy (~1x) + WIM growth / ResetBase / trim headroom
+    $scratchFactor = 2      # DISM expands packages into scratch while applying a large LCU...
+    $scratchFloor  = 6GB    # ...but never assume less than this.
+    $outputFactor  = 1      # rebuilt ISO ~= source ISO size (smaller if trimmed)
+
+    $isoBytes = (Get-Item -LiteralPath $Config.BaseIso).Length
+    $pkgBytes = ($Config.Packages | Measure-Object -Property Length -Sum).Sum
+
+    $needs = @(
+        [pscustomobject]@{ Path = $Config.WorkRoot;   Bytes = $isoBytes * $workFactor }
+        [pscustomobject]@{ Path = $Config.ScratchDir; Bytes = [math]::Max($pkgBytes * $scratchFactor, $scratchFloor) }
+        [pscustomobject]@{ Path = $Config.OutputIso;  Bytes = $isoBytes * $outputFactor }
+    )
+
+    # Sum requirements per unique drive root: WorkRoot/ScratchDir/OutputIso often share one volume,
+    # so checking them independently would under-count. GetPathRoot works on the string; the target
+    # directories need not exist yet.
+    $byRoot = @{}
+    foreach ($need in $needs) {
+        $root = [System.IO.Path]::GetPathRoot($need.Path)
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        if ($byRoot.ContainsKey($root)) { $byRoot[$root] += $need.Bytes }
+        else { $byRoot[$root] = $need.Bytes }
+    }
+
+    Write-Log 'Disk-space precheck:' -Level STEP
+    $short = @()
+    foreach ($root in @($byRoot.Keys)) {
+        $requiredBytes = $byRoot[$root]
+        $requiredGb    = [math]::Round($requiredBytes / 1GB, 2)
+        try {
+            $freeBytes = (New-Object System.IO.DriveInfo($root)).AvailableFreeSpace
+        }
+        catch {
+            Write-Log "  $root could not determine free space ($($_.Exception.Message)); skipping check." -Level WARN
+            continue
+        }
+        $freeGb = [math]::Round($freeBytes / 1GB, 2)
+        $status = if ($freeBytes -lt $requiredBytes) { 'SHORT' } else { 'ok' }
+        Write-Log "  $root need ~$requiredGb GB, free $freeGb GB [$status]"
+        if ($freeBytes -lt $requiredBytes) {
+            $shortGb = [math]::Round(($requiredBytes - $freeBytes) / 1GB, 2)
+            $short  += "  $root : need ~$requiredGb GB, only $freeGb GB free (short $shortGb GB)"
+        }
+    }
+
+    if ($short.Count) {
+        throw ("Insufficient free disk space for Server $($Config.Version):`n" + ($short -join "`n") +
+               "`nFree space on the listed volume(s), or point 'ScratchDir' at a larger drive.")
+    }
 }
 
 function Expand-BaseIso {
@@ -386,6 +496,67 @@ function Update-InstallWim {
     }
 }
 
+function Optimize-InstallWim {
+    <#  When TrimToSelected is set and specific Indexes were patched, export just those editions
+        into a fresh install.wim so the output ISO no longer carries the unpatched editions.
+        No-op otherwise. Surviving editions are renumbered 1..N (Setup selects by name, not index). #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Config,
+        [Parameter(Mandatory)][string]$IsoWork
+    )
+
+    if (-not $Config.TrimToSelected) { return }
+
+    # Trimming only drops UNselected editions; with no selection there is nothing to remove.
+    if (-not ($Config.Indexes -and $Config.Indexes.Count)) {
+        Write-Log 'TrimToSelected is set but no Indexes are selected (all editions kept); nothing to trim.' -Level WARN
+        return
+    }
+
+    $wim     = Join-Path $IsoWork 'sources\install.wim'
+    $trimmed = Join-Path $IsoWork 'sources\install.trimmed.wim'
+
+    # Under -WhatIf the base ISO was never extracted, so install.wim isn't here yet.
+    if (-not (Test-Path -LiteralPath $wim)) {
+        if ($WhatIfPreference) {
+            Write-Log "What if: would trim install.wim to selected index(es) $($Config.Indexes -join ', ')." -Level WARN
+            return
+        }
+        throw "sources\install.wim not found for trimming: $wim"
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($wim, "Trim install.wim to index(es) $($Config.Indexes -join ', ')")) {
+        return
+    }
+
+    $beforeGb = [math]::Round((Get-Item -LiteralPath $wim).Length / 1GB, 2)
+    Write-Log "Trimming install.wim to selected edition(s): $($Config.Indexes -join ', ') (was $beforeGb GB)" -Level STEP
+
+    if (Test-Path -LiteralPath $trimmed) { Remove-Item -LiteralPath $trimmed -Force }
+    New-Item -ItemType Directory -Path $Config.ScratchDir -Force | Out-Null
+
+    try {
+        foreach ($idx in @($Config.Indexes | Sort-Object)) {
+            Write-Log "    Exporting index $idx ..."
+            Export-WindowsImage -SourceImagePath $wim -SourceIndex $idx `
+                -DestinationImagePath $trimmed -CompressionType Max `
+                -ScratchDirectory $Config.ScratchDir | Out-Null
+        }
+    }
+    catch {
+        Write-Log 'Trim failed; leaving the original install.wim in place.' -Level ERROR
+        if (Test-Path -LiteralPath $trimmed) { Remove-Item -LiteralPath $trimmed -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+
+    Remove-Item -LiteralPath $wim -Force
+    Move-Item   -LiteralPath $trimmed -Destination $wim
+
+    $afterGb = [math]::Round((Get-Item -LiteralPath $wim).Length / 1GB, 2)
+    Write-Log "Trimmed install.wim: $beforeGb GB -> $afterGb GB ($($Config.Indexes.Count) edition(s), renumbered 1..$($Config.Indexes.Count))." -Level STEP
+}
+
 function New-BootableIso {
     <#  Rebuild a dual BIOS + UEFI bootable ISO from the patched tree with oscdimg. #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -456,4 +627,5 @@ function Clear-StaleMount {
 }
 
 Export-ModuleMember -Function Write-Log, Disable-ConsoleQuickEdit, Assert-Elevated, Get-OscdimgPath,
-    Get-VersionConfig, Expand-BaseIso, Update-InstallWim, New-BootableIso, Clear-StaleMount
+    Get-VersionConfig, Assert-FreeSpace, Expand-BaseIso, Update-InstallWim, Optimize-InstallWim,
+    New-BootableIso, Clear-StaleMount
