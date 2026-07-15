@@ -21,11 +21,11 @@ ISO is re-authored with **oscdimg** (BIOS + UEFI bootable). Packer is out of sco
 SlipStreamer.ps1  Entry point / driver (run this)
 config/          Per-version settings (2019.psd1, 2022.psd1, 2025.psd1)
 src/             SlipStreamer.psm1 (helper module)
-iso/base/        <- drop clean base ISOs here            (gitignored)
-iso/output/      -> patched ISOs are written here        (gitignored)
+iso/base/        <- drop clean base ISOs here             (gitignored)
+iso/output/      -> patched ISOs are written here         (gitignored)
 updates/<ver>/   <- drop that version's LCU (+ SSU/.NET)  (gitignored)
-work/            Scratch extract + mount area            (gitignored)
-logs/            Per-run transcripts                     (gitignored)
+work/            Scratch extract + mount area             (gitignored)
+logs/            Per-run transcripts                      (gitignored)
 ```
 
 Only the folder structure (via `.gitkeep`) is tracked — ISOs and update packages stay out
@@ -137,13 +137,11 @@ Then boot a throwaway VM (or hand the ISO to Packer) to confirm Setup runs to fi
        Select-Object ProductName, DisplayVersion, CurrentBuildNumber, UBR
    ```
 
-   > **The build number `17763` does NOT by itself confirm patching.** `17763` is Server 2019's
-   > fixed base build and shows on patched *and* unpatched images alike. The value that proves the
-   > LCU applied is the **`UBR`** (Update Build Revision) — the part after the dot in
-   > `10.0.17763.<UBR>`. It must match the revision in your slipstreamed LCU's KB article title
-   > (e.g. *"…OS Build **17763.6414**"*). If `CurrentBuildNumber` is 17763 but `UBR` is still the
-   > base-media value (a low number like `.107`), the LCU did **not** apply. `cmd /c ver` shows the
-   > same `10.0.17763.<UBR>`.
+   > The value that proves the LCU applied is the **`UBR`** (Update Build Revision), the part
+   > after the dot in `10.0.17763.<UBR>`. It must match the revision in your slipstreamed LCU's
+   > KB article title (e.g. *"…OS Build **17763.6414**"*). If `CurrentBuildNumber` is 17763 but 
+   > `UBR` is still the base-media value (a low number like `.107`), the LCU did **not** apply.
+   > `cmd /c ver` shows the same `10.0.17763.<UBR>`.
 
 2. **Confirm the packages are Installed.**
 
@@ -185,20 +183,3 @@ Then boot a throwaway VM (or hand the ISO to Packer) to confirm Setup runs to fi
 `RollupFix`/`ServicingStack`/`NetFx` packages show `Installed`; `.NET Release` matches the version you
 injected; and the edition equals the one selected by `Indexes`. Cross-check each KB against the
 `.msu` files in `updates/<ver>/` — they're named by KB number.
-
-## Notes / limitations
-
-- ISOs shipping only `install.esd` are rejected — convert to `install.wim` first, or use a
-  WIM-based Server ISO.
-
-## Future toggles (deferred by design)
-
-These are intentionally **not** implemented yet — the current scope is applying the dropped
-update packages (SSU / LCU / .NET) into every edition of `install.wim`. Each is a small,
-self-contained addition when needed:
-
-- **Patch `boot.wim` / WinRE** — apply Setup Dynamic + Safe OS updates to `boot.wim` and
-  `winre.wim` so Windows Setup and the recovery environment are serviced too. Would add a
-  `PatchBoot` switch to the config and a step alongside `Update-InstallWim`.
-- **`install.esd` support** — auto-convert `install.esd` → `install.wim` before patching,
-  instead of rejecting it.
