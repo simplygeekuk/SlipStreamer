@@ -176,6 +176,15 @@ function Get-VersionConfig {
         $indexes = @($indexes | ForEach-Object { [int]$_ } | Select-Object -Unique)
     }
 
+    $workRoot = Join-Path $script:RepoRoot "work\$Version"
+
+    # Optional DISM scratch directory. Omitted/empty -> work\<Version>\scratch, keeping DISM's
+    # temp space on the same (large) volume as the work tree instead of the C: user temp dir.
+    $scratchDir = Join-Path $workRoot 'scratch'
+    if ($cfg.ContainsKey('ScratchDir') -and -not [string]::IsNullOrWhiteSpace([string]$cfg.ScratchDir)) {
+        $scratchDir = Resolve-RepoPath ([string]$cfg.ScratchDir)
+    }
+
     [pscustomobject]@{
         Version     = $Version
         BaseIso     = $baseIso
@@ -185,7 +194,8 @@ function Get-VersionConfig {
         Indexes     = $indexes
         VolumeLabel = [string]$cfg.VolumeLabel
         ResetBase   = [bool]$cfg.ResetBase
-        WorkRoot    = Join-Path $script:RepoRoot "work\$Version"
+        WorkRoot    = $workRoot
+        ScratchDir  = $scratchDir
     }
 }
 
@@ -316,14 +326,17 @@ function Update-InstallWim {
         Write-Log "==> Index $idx : $name" -Level STEP
         if (Test-Path -LiteralPath $mountDir) { Remove-Item -LiteralPath $mountDir -Recurse -Force }
         New-Item -ItemType Directory -Path $mountDir -Force | Out-Null
+        # Keep DISM's scratch space off the (often small) C: user temp dir — a large LCU can
+        # need several GB of scratch while it is being applied.
+        New-Item -ItemType Directory -Path $Config.ScratchDir -Force | Out-Null
 
-        Mount-WindowsImage -ImagePath $wim -Index $idx -Path $mountDir | Out-Null
+        Mount-WindowsImage -ImagePath $wim -Index $idx -Path $mountDir -ScratchDirectory $Config.ScratchDir | Out-Null
         try {
             $skipped = @()
             foreach ($pkg in $ordered) {
                 Write-Log "    + $($pkg.Name)"
                 try {
-                    Add-WindowsPackage -Path $mountDir -PackagePath $pkg.FullName -ErrorAction Stop | Out-Null
+                    Add-WindowsPackage -Path $mountDir -PackagePath $pkg.FullName -ScratchDirectory $Config.ScratchDir -ErrorAction Stop | Out-Null
                 }
                 catch {
                     # HResult is a signed Int32; match the hex in the message too as a
@@ -358,16 +371,16 @@ function Update-InstallWim {
 
             if ($Config.ResetBase) {
                 Write-Log '    Running component cleanup (/ResetBase) ...'
-                & dism.exe /Image:$mountDir /Cleanup-Image /StartComponentCleanup /ResetBase | Out-Null
+                & dism.exe /Image:$mountDir /Cleanup-Image /StartComponentCleanup /ResetBase "/ScratchDir:$($Config.ScratchDir)" | Out-Null
                 if ($LASTEXITCODE -ne 0) { throw "dism /ResetBase failed (exit $LASTEXITCODE) on index $idx." }
             }
 
             Write-Log "    Committing index $idx ..."
-            Dismount-WindowsImage -Path $mountDir -Save | Out-Null
+            Dismount-WindowsImage -Path $mountDir -Save -ScratchDirectory $Config.ScratchDir | Out-Null
         }
         catch {
             Write-Log "Error on index $idx; discarding mount to avoid a stale WIM lock." -Level ERROR
-            Dismount-WindowsImage -Path $mountDir -Discard -ErrorAction SilentlyContinue | Out-Null
+            Dismount-WindowsImage -Path $mountDir -Discard -ScratchDirectory $Config.ScratchDir -ErrorAction SilentlyContinue | Out-Null
             throw
         }
     }

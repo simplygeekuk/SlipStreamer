@@ -164,6 +164,7 @@ foreach ($ver in $Version) {
         $idxLabel = if ($config.Indexes -and $config.Indexes.Count) { $config.Indexes -join ', ' } else { 'all' }
         Write-Log "Indexes    : $idxLabel"
         Write-Log "ResetBase  : $($config.ResetBase)"
+        Write-Log "ScratchDir : $($config.ScratchDir)"
 
         # Forward -WhatIf explicitly: preference variables (incl. $WhatIfPreference) do NOT
         # cross the Import-Module boundary, so without this the module functions would run

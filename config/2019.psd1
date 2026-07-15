@@ -22,4 +22,10 @@
     #           (smaller WIM, updates become permanent / non-removable).
     # $false -> keep updates removable and skip the (slow) cleanup pass.
     ResetBase   = $true
+
+    # Optional: directory DISM uses for temporary scratch space while servicing the image.
+    # Omitted/empty -> defaults to work\<version>\scratch (on the same drive as the work tree).
+    # Relative paths are repo-relative; absolute paths are used as-is. Needs several GB free.
+    # ScratchDir = 'D:\dism-scratch'
 }
+
