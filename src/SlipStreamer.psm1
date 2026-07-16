@@ -557,6 +557,43 @@ function Optimize-InstallWim {
     Write-Log "Trimmed install.wim: $beforeGb GB -> $afterGb GB ($($Config.Indexes.Count) edition(s), renumbered 1..$($Config.Indexes.Count))." -Level STEP
 }
 
+function Assert-OutputIsoWritable {
+    <#  Ensure the previous output ISO (if any) can be deleted and replaced. Called as a
+        preflight before the expensive extract/DISM work, and again just before the ISO is
+        rebuilt in case the file was mounted mid-run. #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][pscustomobject]$Config)
+
+    $iso = $Config.OutputIso
+    if (-not (Test-Path -LiteralPath $iso)) { return }
+
+    # Mounted as a virtual DVD drive (e.g. double-clicked in Explorer)? Dismount it: the
+    # build replaces the file anyway, and a leftover mount would otherwise fail the run at
+    # the final step, after all the DISM work.
+    $image = try { Get-DiskImage -ImagePath $iso -ErrorAction Stop } catch { $null }
+    if ($image -and $image.Attached) {
+        if ($WhatIfPreference) {
+            Write-Log "What if: would dismount previous output ISO mounted at $($image.DevicePath): $iso" -Level WARN
+            return
+        }
+        Write-Log "Previous output ISO is mounted at $($image.DevicePath); dismounting: $iso" -Level WARN
+        Dismount-DiskImage -ImagePath $iso | Out-Null
+    }
+
+    if ($WhatIfPreference) { return }
+
+    # Catch any other lock (VM attachment, archive tool, antivirus scan): FileShare::None
+    # fails on any open handle held elsewhere, which is exactly what would break the
+    # pre-oscdimg Remove-Item. Read access only, so a read-only file doesn't false-alarm.
+    try {
+        [System.IO.File]::Open($iso, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::None).Close()
+    }
+    catch [System.IO.IOException] {
+        throw "Output ISO is locked by another process and cannot be replaced: $iso. Close whatever is using it (VM, Explorer, archive tool) and rerun."
+    }
+}
+
 function New-BootableIso {
     <#  Rebuild a dual BIOS + UEFI bootable ISO from the patched tree with oscdimg. #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -585,6 +622,10 @@ function New-BootableIso {
     if (-not $PSCmdlet.ShouldProcess($Config.OutputIso, 'Build bootable ISO with oscdimg')) {
         return
     }
+
+    # Re-check just before deleting: the file may have been mounted or opened during the
+    # long DISM phase, and a locked Remove-Item here would cost the whole build.
+    Assert-OutputIsoWritable -Config $Config
 
     if (Test-Path -LiteralPath $Config.OutputIso) {
         Write-Log "Removing existing output ISO: $($Config.OutputIso)" -Level WARN
@@ -627,5 +668,5 @@ function Clear-StaleMount {
 }
 
 Export-ModuleMember -Function Write-Log, Disable-ConsoleQuickEdit, Assert-Elevated, Get-OscdimgPath,
-    Get-VersionConfig, Assert-FreeSpace, Expand-BaseIso, Update-InstallWim, Optimize-InstallWim,
-    New-BootableIso, Clear-StaleMount
+    Get-VersionConfig, Assert-FreeSpace, Assert-OutputIsoWritable, Expand-BaseIso, Update-InstallWim,
+    Optimize-InstallWim, New-BootableIso, Clear-StaleMount

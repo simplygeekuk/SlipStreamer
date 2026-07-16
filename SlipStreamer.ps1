@@ -170,6 +170,10 @@ foreach ($ver in $Version) {
         # Fail fast if any target volume is short on space before the long extract/patch begins.
         Assert-FreeSpace -Config $config
 
+        # Likewise fail fast (or auto-dismount) if the previous output ISO is mounted/locked,
+        # rather than discover it after an hour of DISM work.
+        Assert-OutputIsoWritable -Config $config -WhatIf:$WhatIfPreference
+
         # Forward -WhatIf explicitly: preference variables (incl. $WhatIfPreference) do NOT
         # cross the Import-Module boundary, so without this the module functions would run
         # for real even under -WhatIf.
