@@ -130,8 +130,10 @@ if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path 
 if ($All) { $Version = $validVersions }
 
 $overallFailures = @()
+$runTimer = [System.Diagnostics.Stopwatch]::StartNew()
 
 foreach ($ver in $Version) {
+    $verTimer   = [System.Diagnostics.Stopwatch]::StartNew()
     $stamp      = (Get-Date).ToString('yyyyMMdd-HHmmss')
     $transcript = Join-Path $logDir "slipstream-$ver-$stamp.log"
     # -WhatIf:$false so a dry run is still transcribed (otherwise the finally-block
@@ -199,11 +201,16 @@ foreach ($ver in $Version) {
                 Remove-Item -LiteralPath $config.WorkRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+        Write-Log "Windows Server $ver took $($verTimer.Elapsed.ToString('hh\:mm\:ss'))" -Level STEP
+
         # Start-Transcript ran with -WhatIf:$false above, so transcription is always active
         # here. (Stop-Transcript has no -WhatIf parameter, so don't pass one.)
         Stop-Transcript | Out-Null
     }
 }
+
+Write-Host ''
+Write-Log "Total run time: $($runTimer.Elapsed.ToString('hh\:mm\:ss'))" -Level STEP
 
 if ($overallFailures.Count -gt 0) {
     Write-Host ''
