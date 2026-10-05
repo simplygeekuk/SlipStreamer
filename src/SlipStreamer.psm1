@@ -132,7 +132,7 @@ function Assert-ValidConfig {
 
     # Single source of truth for the config schema.
     $required = @('BaseIso', 'OutputIso', 'UpdatesPath', 'VolumeLabel')
-    $optional = @('Indexes', 'ResetBase', 'ScratchDir', 'TrimToSelected')
+    $optional = @('Indexes', 'ResetBase', 'ScratchDir', 'TrimToSelected', 'VolumeLicense')
     $allowed  = $required + $optional
 
     # Unknown keys are almost always typos (e.g. 'VolumeLable') that would otherwise be read as
@@ -156,7 +156,7 @@ function Assert-ValidConfig {
     }
 
     # Boolean toggles, if present, must be real booleans (a stray string would coerce misleadingly).
-    foreach ($key in @('ResetBase', 'TrimToSelected')) {
+    foreach ($key in @('ResetBase', 'TrimToSelected', 'VolumeLicense')) {
         if ($Config.ContainsKey($key) -and $Config[$key] -isnot [bool]) {
             throw "config\$Version.psd1 '$key' must be `$true or `$false. Got: '$($Config[$key])'."
         }
@@ -232,6 +232,7 @@ function Get-VersionConfig {
     # Set-StrictMode -Latest a bare $cfg.<missing-key> access throws rather than returning $null.
     $resetBase      = if ($cfg.ContainsKey('ResetBase'))      { [bool]$cfg.ResetBase }      else { $false }
     $trimToSelected = if ($cfg.ContainsKey('TrimToSelected')) { [bool]$cfg.TrimToSelected } else { $false }
+    $volumeLicense  = if ($cfg.ContainsKey('VolumeLicense'))  { [bool]$cfg.VolumeLicense }  else { $false }
 
     [pscustomobject]@{
         Version     = $Version
@@ -245,6 +246,7 @@ function Get-VersionConfig {
         WorkRoot    = $workRoot
         ScratchDir  = $scratchDir
         TrimToSelected = $trimToSelected   # keep every edition unless set; see Optimize-InstallWim
+        VolumeLicense  = $volumeLicense    # write a volume-channel EI.CFG; see Expand-BaseIso
     }
 }
 
@@ -382,6 +384,15 @@ function Expand-BaseIso {
         throw "sources\install.wim not found in the extracted ISO tree: $isoWork"
     }
     Set-ItemProperty -LiteralPath $wim -Name IsReadOnly -Value $false
+
+    # Optional: mark the media as volume-licence, the same EI.CFG that Microsoft's own VL ISOs
+    # carry, so Setup falls back to the edition's built-in KMS client key instead of demanding
+    # a product key. Replaces any EI.CFG copied from the base ISO (-Force: it is read-only).
+    if ($Config.VolumeLicense) {
+        $eiCfg = Join-Path $isoWork 'sources\EI.CFG'
+        Write-Log "Writing volume-licence EI.CFG: $eiCfg"
+        Set-Content -LiteralPath $eiCfg -Value '[Channel]', 'volume', '', '[VL]', '1' -Encoding Ascii -Force
+    }
 
     return $isoWork
 }

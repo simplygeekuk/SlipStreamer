@@ -168,6 +168,7 @@ foreach ($ver in $Version) {
         Write-Log "ResetBase  : $($config.ResetBase)"
         Write-Log "ScratchDir : $($config.ScratchDir)"
         Write-Log "Trim       : $($config.TrimToSelected)"
+        Write-Log "VolumeLic  : $($config.VolumeLicense)"
 
         # Fail fast if any target volume is short on space before the long extract/patch begins.
         Assert-FreeSpace -Config $config

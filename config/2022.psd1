@@ -29,6 +29,12 @@
     # 1..N (Setup selects by edition name, not index). Omitted / $false -> keep every edition.
     TrimToSelected = $true
 
+    # Optional: write a volume-channel sources\EI.CFG into the ISO so Setup does not demand a
+    # product key (it uses the edition's built-in KMS client key). For retail/MSDN media, which
+    # otherwise fail an unattended install with no key. Replaces any EI.CFG on the base ISO.
+    # Omitted / $false -> leave the media's channel as it is.
+    VolumeLicense = $true
+
     # Optional: directory DISM uses for temporary scratch space while servicing the image.
     # Omitted/empty -> defaults to work\<version>\scratch (on the same drive as the work tree).
     # Relative paths are repo-relative; absolute paths are used as-is. Needs several GB free.

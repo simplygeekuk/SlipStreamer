@@ -91,10 +91,11 @@ Each `config/<version>.psd1`:
 | `VolumeLabel` | ISO volume label (≤ 32 chars — enforced up front).                      |
 | `ResetBase`   | `$true` runs `/StartComponentCleanup /ResetBase` — smaller WIM, updates become permanent. `$false` (default) keeps them removable. |
 | `TrimToSelected` | `$true` exports only the patched `Indexes` into a fresh, smaller `install.wim` (drops unpatched editions). Requires a non-empty `Indexes`; ignored (with a warning) when all editions are patched. Surviving editions are renumbered `1..N`. `$false` (default) keeps every edition. |
+| `VolumeLicense` | `$true` writes a volume-channel `sources\EI.CFG` into the ISO (replacing any from the base ISO), so Setup uses the edition's built-in KMS client key instead of demanding a product key. For retail/MSDN media that otherwise fail an unattended install with no key. `$false` (default) leaves the media's channel alone. |
 | `ScratchDir`  | Optional. Directory DISM uses for temporary scratch while servicing. Omitted/empty = `work/<version>/scratch`. Relative = repo-relative; absolute used as-is. Needs several GB free. |
 
 The config is schema-checked on load: unknown/typo'd keys, missing required keys, a non-boolean
-`ResetBase`/`TrimToSelected`, or an over-length `VolumeLabel` all fail immediately with a clear
+`ResetBase`/`TrimToSelected`/`VolumeLicense`, or an over-length `VolumeLabel` all fail immediately with a clear
 message before any work starts.
 
 ## What it does per version
@@ -103,7 +104,8 @@ message before any work starts.
    **precheck free disk space** — the work extract, DISM scratch, and output ISO are estimated and
    summed per volume; a shortfall fails the run up front with a per-drive breakdown.
 2. Mount the base ISO, copy its full contents to `work/<version>/iso`, dismount, clear the
-   read-only flag on `install.wim`.
+   read-only flag on `install.wim`. If `VolumeLicense` is set, write the volume-channel
+   `sources\EI.CFG`.
 3. For **every selected index** in `install.wim` (all by default, or just those in `Indexes`):
    mount → apply updates in order (SSU → LCU → .NET) → optional `/ResetBase` → commit.
 4. If `TrimToSelected` is set (and `Indexes` selects a subset), export just those editions into a
