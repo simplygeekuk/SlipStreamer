@@ -185,3 +185,7 @@ Then boot a throwaway VM (or hand the ISO to Packer) to confirm Setup runs to fi
 `RollupFix`/`ServicingStack`/`NetFx` packages show `Installed`; `.NET Release` matches the version you
 injected; and the edition equals the one selected by `Indexes`. Cross-check each KB against the
 `.msu` files in `updates/<ver>/` — they're named by KB number.
+
+## Licence
+
+Released under the [MIT License](LICENSE).
