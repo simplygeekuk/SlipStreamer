@@ -1,7 +1,7 @@
 @{
     # File NAME of the clean base ISO. Always read from iso/base/ (no path needed).
     # May be a wildcard, as long as it matches exactly one ISO in iso/base/.
-    BaseIso     = 'Server2025*.iso'
+    BaseIso     = 'en-us_windows_server_2025_x64_dvd_b7ec10f3.iso'
 
     # File NAME for the slipstreamed ISO. Always written to iso/output/.
     OutputIso   = 'Server2025_patched.iso'
